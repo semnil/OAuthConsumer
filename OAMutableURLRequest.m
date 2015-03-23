@@ -31,6 +31,7 @@
 - (void)_generateTimestamp;
 - (void)_generateNonce;
 - (NSString *)_signatureBaseString;
+- (NSString *)_oauthHeaderString;
 @end
 
 @implementation OAMutableURLRequest
@@ -112,6 +113,19 @@ signatureProvider:(id<OASignatureProviding, NSObject>)aProvider
     return self;
 }
 
+- (id)initWithURL:(NSURL *)aUrl
+         consumer:(OAConsumer *)aConsumer
+            token:(OAToken *)aToken
+            realm:(NSString *)aRealm
+signatureProvider:(id <OASignatureProviding, NSObject>)aProvider
+     echoProvider:(NSString *)aEchoProvider
+{
+    if (aEchoProvider != nil)
+        echoServiceProvider = [aEchoProvider retain];
+
+    return [self initWithURL:aUrl consumer:aConsumer token:aToken realm:aRealm signatureProvider:aProvider];
+}
+
 - (void)dealloc
 {
 	[consumer release];
@@ -120,6 +134,8 @@ signatureProvider:(id<OASignatureProviding, NSObject>)aProvider
 	[signatureProvider release];
 	[timestamp release];
 	[nonce release];
+    if (echoServiceProvider)
+        [echoServiceProvider release];
 	[super dealloc];
 }
 
@@ -137,34 +153,15 @@ signatureProvider:(id<OASignatureProviding, NSObject>)aProvider
                                                   [token.secret URLEncodedString]]];
     
     // set OAuth headers
-    NSString *oauthToken;
-    if ([token.key isEqualToString:@""])
-        oauthToken = @""; // not used on Request Token transactions
-    else if (!token.verifier || [token.verifier isEqualToString:@""])
-        oauthToken = [NSString stringWithFormat:@"oauth_token=\"%@\", ", [token.key URLEncodedString]];
-	else
-		oauthToken = [NSString stringWithFormat:@"oauth_token=\"%@\", oauth_verifier=\"%@\", ", 
-					  [token.key URLEncodedString],
-					  [token.verifier URLEncodedString]];
-	
-	NSString *callbackURL = @"";
-	if ([token.key isEqualToString:@""]
-		&& consumer.callbackURL
-		&& ![consumer.callbackURL isEqualToString:@""]) {
-		callbackURL = [NSString stringWithFormat:@", oauth_callback=\"%@\"", consumer.callbackURL];
-	}
-	
-    NSString *oauthHeader = [NSString stringWithFormat:@"OAuth realm=\"%@\", oauth_consumer_key=\"%@\", %@oauth_signature_method=\"%@\", oauth_signature=\"%@\", oauth_timestamp=\"%@\", oauth_nonce=\"%@\", oauth_version=\"1.0\"%@",
-                             [realm URLEncodedString],
-                             [consumer.key URLEncodedString],
-                             oauthToken,
-                             [[signatureProvider name] URLEncodedString],
-                             [signature URLEncodedString],
-                             timestamp,
-                             nonce,
-							 callbackURL];
-	
-    [self setValue:oauthHeader forHTTPHeaderField:@"Authorization"];
+    NSString *oauthHeader = [self _oauthHeaderString];
+
+    if (echoServiceProvider == nil)
+        [self setValue:oauthHeader forHTTPHeaderField:@"Authorization"];
+    else {
+        // OAuth Echo
+        [self setValue:echoServiceProvider forHTTPHeaderField:@"X-Auth-Service-Provider"];
+        [self setValue:oauthHeader forHTTPHeaderField:@"X-Verify-Credentials-Authorization"];
+    }
 }
 
 #pragma mark -
@@ -216,14 +213,49 @@ signatureProvider:(id<OASignatureProviding, NSObject>)aProvider
     
     NSArray *sortedPairs = [parameterPairs sortedArrayUsingSelector:@selector(compare:)];
     NSString *normalizedRequestParameters = [sortedPairs componentsJoinedByString:@"&"];
-    
-    // OAuth Spec, Section 9.1.2 "Concatenate Request Elements"
-    NSString *ret = [NSString stringWithFormat:@"%@&%@&%@",
-					 [self HTTPMethod],
-					 [[[self URL] URLStringWithoutQuery] URLEncodedString],
-					 [normalizedRequestParameters URLEncodedString]];
-	
-	return ret;
+
+    if (echoServiceProvider == nil)
+        // OAuth Spec, Section 9.1.2 "Concatenate Request Elements"
+        return [NSString stringWithFormat:@"%@&%@&%@",
+                                          [self HTTPMethod],
+                                          [[[self URL] URLStringWithoutQuery] URLEncodedString],
+                                          [normalizedRequestParameters URLEncodedString]];
+    else
+        // OAuth Echo
+        return [NSString stringWithFormat:@"%@&%@&%@",
+                        [self HTTPMethod],
+                        [echoServiceProvider URLEncodedString],
+                        [normalizedRequestParameters URLEncodedString]];
+}
+
+- (NSString *)_oauthHeaderString
+{
+    NSString *oauthToken;
+    if ([token.key isEqualToString:@""])
+        oauthToken = @""; // not used on Request Token transactions
+    else if (!token.verifier || [token.verifier isEqualToString:@""])
+        oauthToken = [NSString stringWithFormat:@"oauth_token=\"%@\", ", [token.key URLEncodedString]];
+    else
+        oauthToken = [NSString stringWithFormat:@"oauth_token=\"%@\", oauth_verifier=\"%@\", ",
+                                                [token.key URLEncodedString],
+                                                [token.verifier URLEncodedString]];
+
+    NSString *callbackURL = @"";
+    if ([token.key isEqualToString:@""]
+            && consumer.callbackURL
+            && ![consumer.callbackURL isEqualToString:@""]) {
+        callbackURL = [NSString stringWithFormat:@", oauth_callback=\"%@\"", consumer.callbackURL];
+    }
+
+    return [NSString stringWithFormat:@"OAuth realm=\"%@\", oauth_consumer_key=\"%@\", %@oauth_signature_method=\"%@\", oauth_signature=\"%@\", oauth_timestamp=\"%@\", oauth_nonce=\"%@\", oauth_version=\"1.0\"%@",
+                                      [realm URLEncodedString],
+                                      [consumer.key URLEncodedString],
+                                      oauthToken,
+                                      [[signatureProvider name] URLEncodedString],
+                                      [signature URLEncodedString],
+                                      timestamp,
+                                      nonce,
+                                      callbackURL];
 }
 
 @end
