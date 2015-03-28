@@ -39,7 +39,7 @@
         encodedParameters = [[[NSString alloc] initWithData:[self HTTPBody] encoding:NSASCIIStringEncoding] autorelease];
     }
     
-    if ((encodedParameters == nil) || ([encodedParameters isEqualToString:@""]))
+    if ((encodedParameters == nil) || ([encodedParameters isEqualToString:@""]) || ([encodedParameters rangeOfString:@"--"].location == 0))
         return nil;
     
     NSArray *encodedParameterPairs = [encodedParameters componentsSeparatedByString:@"&"];
